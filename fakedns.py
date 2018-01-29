@@ -2,6 +2,7 @@
 # (c) 2014 Patryk Hes
 import socketserver
 import sys
+import time # by haelee
 
 DNS_HEADER_LENGTH = 12
 # TODO make some DNS database with IPs connected to regexs
@@ -39,6 +40,7 @@ class DNSHandler(socketserver.BaseRequestHandler):
             self.dns_response_questions(accepted_questions) +
             self.dns_response_answers(accepted_questions)
         )
+		time.sleep(0.5) # by haelee
         socket.sendto(response, self.client_address)
 
     def dns_extract_questions(self, data):
