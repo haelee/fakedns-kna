@@ -6,8 +6,8 @@ import time # by haelee
 
 DNS_HEADER_LENGTH = 12
 # TODO make some DNS database with IPs connected to regexs
-IP = '192.168.1.1'
-
+IP = '192.168.233.128'
+NSIP = '192.168.233.131'
 
 class DNSHandler(socketserver.BaseRequestHandler):
     def handle(self):
@@ -27,6 +27,7 @@ class DNSHandler(socketserver.BaseRequestHandler):
         # Filter only those questions, which have QTYPE=A and QCLASS=IN
         # TODO this is very limiting, remove QTYPE filter in future, handle different QTYPEs
         accepted_questions = []
+        response_type = 1; # 1: A, 2: NS
         for question in all_questions:
             name = str(b'.'.join(question['name']), encoding='UTF-8')
             if question['qtype'] == b'\x00\x01' and question['qclass'] == b'\x00\x01':
@@ -35,12 +36,27 @@ class DNSHandler(socketserver.BaseRequestHandler):
             else:
                 print('\033[31m{}\033[39m'.format(name))
 
-        response = (
-            self.dns_response_header(data) +
-            self.dns_response_questions(accepted_questions) +
-            self.dns_response_answers(accepted_questions)
-        )
-		time.sleep(0.5) # by haelee
+            if name[-3:] == 'bad':
+                response_type = 2 # 2: NS
+                print('.bad domain')
+
+        if (len (accepted_questions) == 0):
+            return
+
+        if (response_type == 1):
+            response = (
+                self.dns_response_a_header(data) +
+                self.dns_response_questions(accepted_questions) +
+                self.dns_response_answers(accepted_questions, IP)
+            )
+        else:
+            response = (
+                self.dns_response_ns_header(data) +
+                self.dns_response_questions(accepted_questions) +
+                self.dns_response_authorities(accepted_questions) +
+                self.dns_response_answers(accepted_questions, NSIP)
+            )
+        time.sleep(0.5) # by haelee
         socket.sendto(response, self.client_address)
 
     def dns_extract_questions(self, data):
@@ -77,7 +93,7 @@ class DNSHandler(socketserver.BaseRequestHandler):
             questions.append(question)
         return questions
 
-    def dns_response_header(self, data):
+    def dns_response_a_header(self, data):
         """
         Generates DNS response header.
         See http://tools.ietf.org/html/rfc1035 4.1.1. Header section format.
@@ -104,6 +120,33 @@ class DNSHandler(socketserver.BaseRequestHandler):
         header += b'\x00\x00'
         return header
 
+    def dns_response_ns_header(self, data):
+        """
+        Generates DNS response header.
+        See http://tools.ietf.org/html/rfc1035 4.1.1. Header section format.
+        """
+        header = b''
+        # ID - copy it from request
+        header += data[:2]
+        # QR     1    response
+        # OPCODE 0000 standard query
+        # AA     0    not authoritative
+        # TC     0    not truncated
+        # RD     0    recursion not desired
+        # RA     0    recursion not available
+        # Z      000  unused
+        # RCODE  0000 no error condition
+        header += b'\x80\x00'
+        # QDCOUNT - question entries count, set to QDCOUNT from request
+        header += data[4:6]
+        # ANCOUNT - answer records count, set to QDCOUNT from request
+        header += b'\x00\x00'
+        # NSCOUNT - authority records count, set to 0
+        header += data[4:6]
+        # ARCOUNT - additional records count, set to 0
+        header += data[4:6]
+        return header
+
     def dns_response_questions(self, questions):
         """
         Generates DNS response questions.
@@ -123,38 +166,73 @@ class DNSHandler(socketserver.BaseRequestHandler):
             sections += section
         return sections
 
-    def dns_response_answers(self, questions):
-        """
-        Generates DNS response answers.
-        See http://tools.ietf.org/html/rfc1035 4.1.3. Resource record format.
-        """
+    def dns_response_answers(self, questions, ip_address):
         records = b''
+
         for question in questions:
             record = b''
+
+            # Name
             for label in question['name']:
-                # Length octet
                 record += bytes([len(label)])
                 record += label
-            # Zero length octet
             record += b'\x00'
-            # TYPE - just copy QTYPE
-            # TODO QTYPE values set is superset of TYPE values set, handle different QTYPEs, see RFC 1035 3.2.3.
+
+            # Type
             record += question['qtype']
-            # CLASS - just copy QCLASS
-            # TODO QCLASS values set is superset of CLASS values set, handle at least * QCLASS, see RFC 1035 3.2.5.
-            record += question['qclass']
-            # TTL - 32 bit unsigned integer. Set to 0 to inform, that response
-            # should not be cached.
-            record += b'\x00\x00\x00\x00'
-            # RDLENGTH - 16 bit unsigned integer, length of RDATA field.
-            # In case of QTYPE=A and QCLASS=IN, RDLENGTH=4.
+
+            # Class: IN
+            record += b'\x00\x01'
+
+            # TTL: 0 minutes (600 seconds)
+            record += b'\x00\x00\x02\x58'
+
+            # Data length: 4 bytes (IP address)
             record += b'\x00\x04'
-            # RDATA - in case of QTYPE=A and QCLASS=IN, it's IPv4 address.
-            record += b''.join(map(
-                lambda x: bytes([int(x)]),
-                IP.split('.')
-            ))
+
+            # Data: IP address
+            record += b''.join(map(lambda x: bytes([int(x)]), ip_address.split('.')))
+
             records += record
+
+        return records
+
+    def dns_response_authorities(self, questions):
+        records = b''
+
+        for question in questions:
+            record = b''
+
+            name = b''
+            length = 0
+            for label in question['name']:
+                name += bytes([len(label)])
+                name += label
+                length += len(label) + 1
+            length += 1
+            name += b'\x00'
+
+            # Name
+            record += name
+
+            # Type: NS
+            record += b'\x00\x02'
+
+             # Class: IN
+            record += b'\x00\x01'
+
+            # TTL: 0 minutes (600 seconds)
+            record += b'\x00\x00\x02\x58'
+
+            # Data length
+            record += b'\x00'
+            record += bytes([length])
+
+            # Data: Name server
+            record += name
+
+            records += record
+
         return records
 
 if __name__ == '__main__':
