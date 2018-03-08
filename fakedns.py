@@ -7,7 +7,8 @@ import time # by haelee
 DNS_HEADER_LENGTH = 12
 # TODO make some DNS database with IPs connected to regexs
 IP = '192.168.233.128'
-NSIP = '192.168.233.131'
+NSIP1 = '192.168.233.131' # NS-1: attacker's DNS (ending with '.bad')
+NSIP2 = '192.168.233.134' # NS-2: benign DNS (ending with '.kna')
 
 class DNSHandler(socketserver.BaseRequestHandler):
     def handle(self):
@@ -27,7 +28,7 @@ class DNSHandler(socketserver.BaseRequestHandler):
         # Filter only those questions, which have QTYPE=A and QCLASS=IN
         # TODO this is very limiting, remove QTYPE filter in future, handle different QTYPEs
         accepted_questions = []
-        response_type = 1; # 1: A, 2: NS
+        response_type = 1; # 1: A, 2: NS-1, 3: NS-2
         for question in all_questions:
             name = str(b'.'.join(question['name']), encoding='UTF-8')
             if question['qtype'] == b'\x00\x01' and question['qclass'] == b'\x00\x01':
@@ -36,9 +37,13 @@ class DNSHandler(socketserver.BaseRequestHandler):
             else:
                 print('\033[31m{}\033[39m'.format(name))
 
-            if name[-3:] == 'bad':
-                response_type = 2 # 2: NS
-                print('.bad domain')
+            if (len(name) >= 6):
+                if name[-3:] == 'bad':
+                    response_type = 2 # 2: NS-1
+                    print('.bad domain')
+                if name[-3:] == 'kna':
+                    response_type = 3 # 3: NS-2
+                    print('.bad domain')
 
         if (len (accepted_questions) == 0):
             return
@@ -49,12 +54,19 @@ class DNSHandler(socketserver.BaseRequestHandler):
                 self.dns_response_questions(accepted_questions) +
                 self.dns_response_answers(accepted_questions, IP)
             )
+        elif (response_type == 2):
+            response = (
+                self.dns_response_ns_header(data) +
+                self.dns_response_questions(accepted_questions) +
+                self.dns_response_authorities(accepted_questions) +
+                self.dns_response_answers(accepted_questions, NSIP1)
+            )
         else:
             response = (
                 self.dns_response_ns_header(data) +
                 self.dns_response_questions(accepted_questions) +
                 self.dns_response_authorities(accepted_questions) +
-                self.dns_response_answers(accepted_questions, NSIP)
+                self.dns_response_answers(accepted_questions, NSIP2)
             )
         time.sleep(0.5) # by haelee
         socket.sendto(response, self.client_address)
